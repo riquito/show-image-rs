@@ -1,8 +1,6 @@
 use super::AxisId;
 use super::DeviceId;
 use super::ElementState;
-use super::KeyboardInput;
-use super::ModifiersState;
 use super::MouseButton;
 use super::MouseButtonState;
 use super::MouseScrollDelta;
@@ -48,9 +46,6 @@ pub enum WindowEvent {
 
 	/// A window received keyboard input.
 	KeyboardInput(WindowKeyboardInputEvent),
-
-	/// A window received text input.
-	TextInput(WindowTextInputEvent),
 
 	/// The mouse cursor entered a window.
 	MouseEnter(WindowMouseEnterEvent),
@@ -112,7 +107,6 @@ impl WindowEvent {
 			Self::FocusGained(x) => x.window_id,
 			Self::FocusLost(x) => x.window_id,
 			Self::KeyboardInput(x) => x.window_id,
-			Self::TextInput(x) => x.window_id,
 			Self::MouseEnter(x) => x.window_id,
 			Self::MouseLeave(x) => x.window_id,
 			Self::MouseMove(x) => x.window_id,
@@ -221,7 +215,7 @@ pub struct WindowKeyboardInputEvent {
 	pub device_id: DeviceId,
 
 	/// The received input.
-	pub input: KeyboardInput,
+	pub input: super::KeyEvent,
 
 	/// Flag to indicate if the input is synthetic.
 	///
@@ -283,9 +277,6 @@ pub struct WindowMouseMoveEvent {
 
 	/// The pressed state of all mouse buttons.
 	pub buttons: MouseButtonState,
-
-	/// The state of the keyboard modifiers at the time of the event.
-	pub modifiers: ModifiersState,
 }
 
 /// A window received mouse input.
@@ -311,9 +302,6 @@ pub struct WindowMouseButtonEvent {
 
 	/// The pressed state of all mouse buttons.
 	pub buttons: MouseButtonState,
-
-	/// The state of the keyboard modifiers at the time of the event.
-	pub modifiers: ModifiersState,
 }
 
 /// A window received mouse wheel input.
@@ -336,9 +324,6 @@ pub struct WindowMouseWheelEvent {
 
 	/// The pressed state of all mouse buttons.
 	pub buttons: MouseButtonState,
-
-	/// The state of the keyboard modifiers at the time of the event.
-	pub modifiers: ModifiersState,
 }
 
 /// A window received axis motion input.
@@ -451,7 +436,6 @@ impl_from_variant!(WindowEvent::HoveredFileCancelled(WindowHoveredFileCancelledE
 impl_from_variant!(WindowEvent::FocusGained(WindowFocusGainedEvent));
 impl_from_variant!(WindowEvent::FocusLost(WindowFocusLostEvent));
 impl_from_variant!(WindowEvent::KeyboardInput(WindowKeyboardInputEvent));
-impl_from_variant!(WindowEvent::TextInput(WindowTextInputEvent));
 impl_from_variant!(WindowEvent::MouseEnter(WindowMouseEnterEvent));
 impl_from_variant!(WindowEvent::MouseLeave(WindowMouseLeaveEvent));
 impl_from_variant!(WindowEvent::MouseMove(WindowMouseMoveEvent));

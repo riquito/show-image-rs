@@ -218,7 +218,10 @@ impl<'a> WindowHandle<'a> {
 	/// Some window managers may ignore this property.
 	pub fn set_inner_size(&mut self, size: impl Into<glam::UVec2>) {
 		let size = size.into();
-		self.window_mut().window.set_inner_size(winit::dpi::PhysicalSize::new(size.x, size.y));
+		match self.window_mut().window.request_inner_size(winit::dpi::PhysicalSize::new(size.x, size.y)) {
+			Some(_new_size) => (),
+			None => (),
+		};
 		self.window().window.request_redraw();
 	}
 

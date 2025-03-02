@@ -1,19 +1,26 @@
 //! Event types.
 
-pub use device::*;
-pub use window::*;
-
 pub use winit::event::AxisId;
 pub use winit::event::ButtonId;
 pub use winit::event::DeviceId;
 pub use winit::event::Force;
-pub use winit::event::ModifiersState;
+pub use winit::event::KeyEvent;
+pub use winit::event::Modifiers;
 pub use winit::event::MouseScrollDelta;
-pub use winit::event::ScanCode;
+pub use winit::event::RawKeyEvent;
 pub use winit::event::StartCause;
 pub use winit::event::Touch;
 pub use winit::event::TouchPhase;
-pub use winit::event::VirtualKeyCode;
+pub use winit::keyboard::Key;
+pub use winit::keyboard::KeyCode;
+pub use winit::keyboard::KeyLocation;
+pub use winit::keyboard::ModifiersKeyState;
+pub use winit::keyboard::ModifiersState;
+pub use winit::keyboard::NamedKey;
+pub use winit::keyboard::NativeKey;
+pub use winit::keyboard::NativeKeyCode;
+pub use winit::keyboard::PhysicalKey;
+pub use winit::keyboard::SmolStr;
 
 macro_rules! impl_from_variant {
 	($for:ident::$variant:ident($from:ty)) => {
@@ -26,7 +33,10 @@ macro_rules! impl_from_variant {
 }
 
 mod device;
+pub use device::*;
+
 mod window;
+pub use window::*;
 
 /// Control flow properties for event handlers.
 ///
@@ -77,27 +87,6 @@ pub enum Event {
 
 impl_from_variant!(Event::WindowEvent(WindowEvent));
 impl_from_variant!(Event::DeviceEvent(DeviceEvent));
-
-/// Keyboard input.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct KeyboardInput {
-	/// Scan code of the physical key.
-	///
-	/// This should not change if the user adjusts the host's keyboard map.
-	/// Use when the physical location of the key is more important than the key's host GUI semantics, such as for movement controls in a first-person game.
-	pub scan_code: ScanCode,
-
-	/// Virtual key code indentifying the semantic meaning of the key.
-	///
-	/// Use this when the semantics of the key are more important than the physical location of the key, such as when implementing appropriate behavior for "page up".
-	pub key_code: Option<VirtualKeyCode>,
-
-	/// State of the key (pressed or released).
-	pub state: ElementState,
-
-	/// Keyboard modifiers that were active at the time of the event.
-	pub modifiers: ModifiersState,
-}
 
 /// OS theme (light or dark).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -155,6 +144,12 @@ pub enum MouseButton {
 	/// The middle mouse button (usually triggered by pressing the scroll wheel).
 	Middle,
 
+	/// The "back" thumb button.
+	Back,
+
+	/// The "forward" thumb button.
+	Forward,
+
 	/// An other mouse button identified by index.
 	Other(u16),
 }
@@ -173,6 +168,16 @@ impl MouseButton {
 	/// Check if the button is the middle mouse button.
 	pub fn is_middle(self) -> bool {
 		self == Self::Middle
+	}
+
+	/// Check if the button is the "back" mouse thumb button.
+	pub fn is_back(self) -> bool {
+		self == Self::Back
+	}
+
+	/// Check if the button is the "forward" mouse thumb button.
+	pub fn is_forward(self) -> bool {
+		self == Self::Forward
 	}
 
 	/// Check if the button is a specific other button.

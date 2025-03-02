@@ -13,6 +13,12 @@ pub enum CreateWindowError {
 
 	/// Failed to create a surface for drawing.
 	CreateSurface(wgpu::CreateSurfaceError),
+
+	/// Failed to get the raw device handle.
+	GetRawDeviceHandle(raw_window_handle_0_6::HandleError),
+
+	/// Failed to get the raw window handle.
+	GetRawWindowHandle(raw_window_handle_0_6::HandleError),
 }
 
 /// An error that can occur while interpreting image data.
@@ -173,6 +179,8 @@ impl std::fmt::Display for CreateWindowError {
 			Self::Winit(e) => write!(f, "{}", e),
 			Self::GetDevice(e) => write!(f, "{}", e),
 			Self::CreateSurface(e) => write!(f, "{}", e),
+			Self::GetRawDeviceHandle(e) => write!(f, "failed to get raw device handle from window: {}", e),
+			Self::GetRawWindowHandle(e) => write!(f, "failed to get raw window handle: {}", e),
 		}
 	}
 }

@@ -16,6 +16,7 @@ use crate::WindowHandle;
 use crate::WindowId;
 use crate::WindowOptions;
 use glam::Affine2;
+use winit::event_loop::ActiveEventLoop;
 
 /// Internal shorthand type-alias for the correct [`winit::event_loop::EventLoop`].
 ///
@@ -26,11 +27,6 @@ type EventLoop = winit::event_loop::EventLoop<ContextFunction>;
 ///
 /// Not for use in public APIs.
 type DynContextEventHandler = dyn FnMut(&mut ContextHandle, &mut Event, &mut event::EventHandlerControlFlow);
-
-/// Internal shorthand type-alias for the correct [`winit::event_loop::EventLoopWindowTarget`].
-///
-/// Not for use in public APIs.
-type EventLoopWindowTarget = winit::event_loop::EventLoopWindowTarget<ContextFunction>;
 
 impl From<crate::Color> for wgpu::Color {
 	fn from(other: crate::Color) -> Self {
@@ -93,6 +89,9 @@ pub(crate) struct Context {
 	/// Cache for mouse state.
 	pub mouse_cache: super::mouse_cache::MouseCache,
 
+	/// Cache for last-known modifiers state.
+	pub modifiers: winit::event::Modifiers,
+
 	/// If true, exit the program when the last window closes.
 	pub exit_with_last_window: bool,
 
@@ -109,7 +108,7 @@ pub(crate) struct Context {
 /// To interact with the context from a different thread, use a [`ContextProxy`].
 pub struct ContextHandle<'a> {
 	pub(crate) context: &'a mut Context,
-	pub(crate) event_loop: &'a EventLoopWindowTarget,
+	pub(crate) event_loop: &'a ActiveEventLoop,
 }
 
 impl GpuContext {
@@ -171,7 +170,7 @@ impl Context {
 			backends: select_backend(),
 			dx12_shader_compiler: wgpu::Dx12Compiler::Fxc,
 		});
-		let event_loop = winit::event_loop::EventLoopBuilder::with_user_event().build();
+		let event_loop = winit::event_loop::EventLoop::with_user_event().build().unwrap(); // TODO: Handle error gracefully.
 		let proxy = ContextProxy::new(event_loop.create_proxy(), std::thread::current().id());
 
 		Ok(Self {
@@ -183,6 +182,7 @@ impl Context {
 			swap_chain_format,
 			windows: Vec::new(),
 			mouse_cache: Default::default(),
+			modifiers: winit::event::Modifiers::default(),
 			exit_with_last_window: false,
 			event_handlers: Vec::new(),
 			background_tasks: Vec::new(),
@@ -205,9 +205,10 @@ impl Context {
 	/// but for portability reasons it is enforced on all platforms.
 	pub fn run(mut self) -> ! {
 		let event_loop = self.event_loop.take().unwrap();
-		event_loop.run(move |event, event_loop, control_flow| {
+		// TODO: Migrate to AppHandler trait and report errors.
+		event_loop.run(move |event, event_loop| {
 			let initial_window_count = self.windows.len();
-			self.handle_event(event, event_loop, control_flow);
+			self.handle_event(event, event_loop);
 
 			// Check if the event handlers caused the last window(s) to close.
 			// If so, generate an AllWIndowsClosed event for the event handlers.
@@ -217,13 +218,14 @@ impl Context {
 					self.exit(0);
 				}
 			}
-		});
+		}).unwrap();
+		panic!("winit event loop stopped");
 	}
 }
 
 impl<'a> ContextHandle<'a> {
 	/// Create a new context handle.
-	fn new(context: &'a mut Context, event_loop: &'a EventLoopWindowTarget) -> Self {
+	fn new(context: &'a mut Context, event_loop: &'a ActiveEventLoop) -> Self {
 		Self { context, event_loop }
 	}
 
@@ -298,7 +300,7 @@ impl Context {
 	/// Create a window.
 	fn create_window(
 		&mut self,
-		event_loop: &EventLoopWindowTarget,
+		event_loop: &ActiveEventLoop,
 		title: impl Into<String>,
 		options: WindowOptions,
 	) -> Result<usize, CreateWindowError> {
@@ -307,7 +309,7 @@ impl Context {
 		} else {
 			None
 		};
-		let mut window = winit::window::WindowBuilder::new()
+		let mut window = winit::window::Window::default_attributes()
 			.with_title(title)
 			.with_visible(!options.start_hidden)
 			.with_resizable(options.resizable)
@@ -318,9 +320,9 @@ impl Context {
 			window = window.with_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1]));
 		}
 
-		let window = window.build(event_loop)?;
-		let surface = unsafe { self.instance.create_surface(&window)? };
-
+		let window = event_loop.create_window(window)?;
+		let handle = super::util::RawWindowHandle::new(&window)?;
+		let surface = unsafe { self.instance.create_surface(&handle)? };
 
 		let gpu = match &self.gpu {
 			Some(x) => x,
@@ -547,10 +549,9 @@ impl Context {
 	fn handle_event(
 		&mut self,
 		event: winit::event::Event<ContextFunction>,
-		event_loop: &EventLoopWindowTarget,
-		control_flow: &mut winit::event_loop::ControlFlow,
+		event_loop: &ActiveEventLoop,
 	) {
-		*control_flow = winit::event_loop::ControlFlow::Wait;
+		event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
 
 		// Split between Event<ContextFunction> and ContextFunction commands.
 		let event = match super::event::map_nonuser_event(event) {
@@ -562,6 +563,9 @@ impl Context {
 		};
 
 		self.mouse_cache.handle_event(&event);
+		if let winit::event::Event::WindowEvent { event: winit::event::WindowEvent::ModifiersChanged(modifiers), .. } = &event {
+			self.modifiers = modifiers.clone();
+		}
 
 		// Convert to own event type.
 		let mut event = match super::event::convert_winit_event(event, &self.mouse_cache) {
@@ -588,14 +592,20 @@ impl Context {
 		// Perform default actions for events.
 		match event {
 			#[cfg(feature = "save")]
-			#[allow(deprecated)]
 			Event::WindowEvent(WindowEvent::KeyboardInput(event)) => {
-				if event.input.state.is_pressed() && event.input.key_code == Some(event::VirtualKeyCode::S) {
-					let overlays = event.input.modifiers.alt();
-					let modifiers = event.input.modifiers & !event::ModifiersState::ALT;
-					if modifiers == event::ModifiersState::CTRL {
+				// TODO: Eww.. testing for keys this way is horrible.
+				let character = match &event.input.logical_key {
+					event::Key::Character(c) => Some(c.as_str()),
+					event::Key::Named(_) => None,
+					event::Key::Unidentified(_) => None,
+					event::Key::Dead(_) => None,
+				};
+				if event.input.state.is_pressed() && character == Some("s") {
+					let overlays = self.modifiers.state().contains(event::ModifiersState::ALT);
+					let modifiers = self.modifiers.state() & !event::ModifiersState::ALT;
+					if modifiers == event::ModifiersState::CONTROL {
 						self.save_image_prompt(event.window_id, overlays);
-					} else if modifiers == event::ModifiersState::CTRL | event::ModifiersState::SHIFT {
+					} else if modifiers == event::ModifiersState::CONTROL | event::ModifiersState::SHIFT {
 						self.save_image(event.window_id, overlays);
 					}
 				}
@@ -616,7 +626,7 @@ impl Context {
 	}
 
 	/// Run global event handlers.
-	fn run_event_handlers(&mut self, event: &mut Event, event_loop: &EventLoopWindowTarget) {
+	fn run_event_handlers(&mut self, event: &mut Event, event_loop: &ActiveEventLoop) {
 		use super::util::RetainMut;
 
 		// Event handlers could potentially modify the list of event handlers.
@@ -645,7 +655,7 @@ impl Context {
 	}
 
 	/// Run window-specific event handlers.
-	fn run_window_event_handlers(&mut self, event: &mut WindowEvent, event_loop: &EventLoopWindowTarget) -> bool {
+	fn run_window_event_handlers(&mut self, event: &mut WindowEvent, event_loop: &ActiveEventLoop) -> bool {
 		use super::util::RetainMut;
 
 		let window_index = match self.windows.iter().position(|x| x.id() == event.window_id()) {
