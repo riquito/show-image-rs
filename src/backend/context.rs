@@ -167,11 +167,17 @@ impl Context {
 	/// but they must be run from the main thread and the [`run`](Self::run) function never returns.
 	/// So it is not possible to *run* more than one context.
 	pub fn new(swap_chain_format: wgpu::TextureFormat) -> Result<Self, GetDeviceError> {
-		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+		let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
 			backends: select_backend(),
-			dx12_shader_compiler: wgpu::Dx12Compiler::Fxc,
-			gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
 			flags: wgpu::InstanceFlags::empty(),
+			backend_options: wgpu::BackendOptions {
+				gl: wgpu::GlBackendOptions {
+					gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+				},
+				dx12: wgpu::Dx12BackendOptions {
+					shader_compiler: wgpu::Dx12Compiler::StaticDxc,
+				},
+			},
 		});
 		let event_loop = winit::event_loop::EventLoop::with_user_event().build().unwrap(); // TODO: Handle error gracefully.
 		let proxy = ContextProxy::new(event_loop.create_proxy(), std::thread::current().id());
@@ -492,6 +498,7 @@ impl Context {
 			mip_level_count: None,
 			base_array_layer: 0,
 			array_layer_count: None,
+			usage: Some(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC),
 		});
 
 		render_pass(
@@ -518,15 +525,15 @@ impl Context {
 		});
 
 		encoder.copy_texture_to_buffer(
-			wgpu::ImageCopyTexture {
+			wgpu::TexelCopyTextureInfo {
 				texture: &target,
 				mip_level: 0,
 				origin: wgpu::Origin3d::ZERO,
 				aspect: wgpu::TextureAspect::All,
 			},
-			wgpu::ImageCopyBuffer {
+			wgpu::TexelCopyBufferInfo {
 				buffer: &buffer,
-				layout: wgpu::ImageDataLayout {
+				layout: wgpu::TexelCopyBufferLayout {
 					offset: 0,
 					bytes_per_row: Some(bytes_per_row),
 					rows_per_image: Some(image.info().size.y),
