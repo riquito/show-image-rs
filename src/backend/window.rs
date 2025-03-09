@@ -13,6 +13,7 @@ use crate::event::WindowEvent;
 use glam::Vec3;
 use glam::{Affine2, Vec2};
 use indexmap::IndexMap;
+use std::sync::Arc;
 
 /// Internal shorthand for window event handlers.
 type DynWindowEventHandler = dyn FnMut(WindowHandle, &mut WindowEvent, &mut EventHandlerControlFlow);
@@ -20,7 +21,7 @@ type DynWindowEventHandler = dyn FnMut(WindowHandle, &mut WindowEvent, &mut Even
 /// Window capable of displaying images using wgpu.
 pub(crate) struct Window {
 	/// The winit window.
-	pub window: winit::window::Window,
+	pub window: Arc<winit::window::Window>,
 
 	/// If true, preserve the aspect ratio of images.
 	pub preserve_aspect_ratio: bool,
@@ -29,7 +30,7 @@ pub(crate) struct Window {
 	pub background_color: Color,
 
 	/// The wgpu surface to render to.
-	pub surface: wgpu::Surface,
+	pub surface: wgpu::Surface<'static>,
 
 	/// The window specific uniforms for the render pipeline.
 	pub uniforms: UniformsBuffer<WindowUniforms>,

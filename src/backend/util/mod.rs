@@ -15,6 +15,3 @@ pub use retain_mut::RetainMut;
 
 mod uniforms_buffer;
 pub use uniforms_buffer::{ToStd140, UniformsBuffer};
-
-mod window_handle;
-pub use window_handle::RawWindowHandle;
