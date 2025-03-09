@@ -824,6 +824,7 @@ async fn get_device(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>) -> R
 			label: Some("show-image"),
 			required_limits: wgpu::Limits::default(),
 			required_features: wgpu::Features::default(),
+			memory_hints: wgpu::MemoryHints::Performance,
 		},
 		None,
 	);
@@ -898,6 +899,7 @@ fn create_render_pipeline(
 			compilation_options: wgpu::PipelineCompilationOptions {
 				constants: &std::collections::HashMap::new(),
 				zero_initialize_workgroup_memory: true,
+				vertex_pulling_transform: false,
 			},
 			buffers: &[],
 		},
@@ -907,6 +909,7 @@ fn create_render_pipeline(
 			compilation_options: wgpu::PipelineCompilationOptions {
 				constants: &std::collections::HashMap::new(),
 				zero_initialize_workgroup_memory: true,
+				vertex_pulling_transform: false,
 			},
 			targets: &[Some(wgpu::ColorTargetState {
 				format: swap_chain_format,
@@ -941,6 +944,7 @@ fn create_render_pipeline(
 			alpha_to_coverage_enabled: false,
 		},
 		multiview: None,
+		cache: None,
 	})
 }
 
