@@ -895,21 +895,19 @@ fn create_render_pipeline(
 		layout: Some(layout),
 		vertex: wgpu::VertexState {
 			module: vertex_shader,
-			entry_point: "main",
+			entry_point: Some("main"),
 			compilation_options: wgpu::PipelineCompilationOptions {
 				constants: &std::collections::HashMap::new(),
 				zero_initialize_workgroup_memory: true,
-				vertex_pulling_transform: false,
 			},
 			buffers: &[],
 		},
 		fragment: Some(wgpu::FragmentState {
 			module: fragment_shader,
-			entry_point: "main",
+			entry_point: Some("main"),
 			compilation_options: wgpu::PipelineCompilationOptions {
 				constants: &std::collections::HashMap::new(),
 				zero_initialize_workgroup_memory: true,
-				vertex_pulling_transform: false,
 			},
 			targets: &[Some(wgpu::ColorTargetState {
 				format: swap_chain_format,
