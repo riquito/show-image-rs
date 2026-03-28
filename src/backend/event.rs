@@ -177,7 +177,15 @@ pub fn convert_winit_window_event(
 
 		// TODO
 		W::ActivationTokenDone { .. } => None,
-		W::PinchGesture { .. } => None,
+		W::PinchGesture { device_id, delta, phase } => Some(
+			event::WindowTouchpadMagnifyEvent {
+				window_id,
+				device_id,
+				scale: 1.0 + delta,
+				phase,
+			}
+			.into(),
+		),
 		W::PanGesture { .. } => None,
 		W::DoubleTapGesture { .. } => None,
 		W::RotationGesture { .. } => None,

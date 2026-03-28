@@ -410,12 +410,12 @@ impl Context {
 
 		let frame = match window.surface.get_current_texture() {
 			Ok(frame) => frame,
-			Err(wgpu::SurfaceError::Timeout) | Err(wgpu::SurfaceError::Outdated) => {
-				// Surface not ready yet, skip this frame.
+			Err(e @ wgpu::SurfaceError::Timeout) | Err(e @ wgpu::SurfaceError::Outdated) => {
+				eprintln!("render_window: skipping frame: {e}");
 				return Ok(());
 			}
-			Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::OutOfMemory) | Err(wgpu::SurfaceError::Other) => {
-				// Reconfigure the surface and retry.
+			Err(e) => {
+				eprintln!("render_window: reconfiguring surface: {e}");
 				let gpu = self.gpu.as_ref().unwrap();
 				let size = glam::UVec2::new(
 					window.window.inner_size().width,
@@ -838,6 +838,8 @@ async fn get_device(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>) -> R
 	});
 
 	let adapter = adapter.await.ok_or(NoSuitableAdapterFound)?;
+	#[cfg(feature = "log")]
+	log::info!("Selected GPU adapter: {:?}", adapter.get_info());
 
 	// Create the logical device and command queue
 	let device = adapter.request_device(
@@ -979,7 +981,7 @@ fn configure_surface(
 		format,
 		width: size.x,
 		height: size.y,
-		present_mode: wgpu::PresentMode::AutoVsync,
+		present_mode: wgpu::PresentMode::Mailbox,
 		alpha_mode: wgpu::CompositeAlphaMode::Auto,
 		view_formats: vec![format],
 		desired_maximum_frame_latency: 2,
