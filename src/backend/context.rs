@@ -577,7 +577,7 @@ impl Context {
 		}
 
 		// Convert to own event type.
-		let mut event = match super::event::convert_winit_event(event, &self.mouse_cache) {
+		let mut event = match super::event::convert_winit_event(event, &self.mouse_cache, self.modifiers.state()) {
 			Some(x) => x,
 			None => return,
 		};

@@ -222,6 +222,9 @@ pub struct WindowKeyboardInputEvent {
 	/// Some synthetic events may be generated to report changes in keyboard state while the window did not have input focus.
 	/// This flag allows you to distinguish such events.
 	pub is_synthetic: bool,
+
+	/// The state of the modifier keys at the time of the event.
+	pub modifiers: super::ModifiersState,
 }
 
 /// A window received text input.

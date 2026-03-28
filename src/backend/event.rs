@@ -3,13 +3,14 @@ use super::mouse_cache::MouseCache;
 pub fn convert_winit_event(
 	event: winit::event::Event<()>,
 	mouse_cache: &MouseCache,
+	modifiers: winit::keyboard::ModifiersState,
 ) -> Option<crate::event::Event> {
 	use crate::event::Event as C;
 	use winit::event::Event as W;
 
 	match event {
 		W::UserEvent(_) => None,
-		W::WindowEvent { window_id, event } => Some(convert_winit_window_event(window_id, event, mouse_cache)?.into()),
+		W::WindowEvent { window_id, event } => Some(convert_winit_window_event(window_id, event, mouse_cache, modifiers)?.into()),
 		W::DeviceEvent { device_id, event } => Some(convert_winit_device_event(device_id, event).into()),
 		W::NewEvents(_) => Some(C::NewEvents),
 		W::AboutToWait => Some(C::MainEventsCleared),
@@ -55,6 +56,7 @@ pub fn convert_winit_window_event(
 	window_id: winit::window::WindowId,
 	event: winit::event::WindowEvent,
 	mouse_cache: &MouseCache,
+	modifiers: winit::keyboard::ModifiersState,
 ) -> Option<crate::event::WindowEvent> {
 	use crate::event;
 	use winit::event::WindowEvent as W;
@@ -81,6 +83,7 @@ pub fn convert_winit_window_event(
 				device_id,
 				input: event,
 				is_synthetic,
+				modifiers,
 			}
 			.into(),
 		),
@@ -173,11 +176,11 @@ pub fn convert_winit_window_event(
 		W::ScaleFactorChanged { scale_factor, .. } => Some(event::WindowScaleFactorChangedEvent { window_id, scale_factor }.into()),
 
 		// TODO
-		W::ActivationTokenDone { serial, token } => None,
-		W::PinchGesture { device_id, delta, phase } => None,
-		W::PanGesture { device_id, delta, phase } => None,
-		W::DoubleTapGesture { device_id } => None,
-		W::RotationGesture { device_id, delta, phase } => None,
+		W::ActivationTokenDone { .. } => None,
+		W::PinchGesture { .. } => None,
+		W::PanGesture { .. } => None,
+		W::DoubleTapGesture { .. } => None,
+		W::RotationGesture { .. } => None,
 		W::RedrawRequested => Some(event::WindowRedrawRequestedEvent { window_id }.into()),
 	}
 }
