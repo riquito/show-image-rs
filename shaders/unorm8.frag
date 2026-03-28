@@ -98,11 +98,32 @@ vec4 get_pixel(uint x, uint y) {
 }
 
 void main() {
-	uint x = uint(floor(texture_coords.x));
-	uint y = uint(floor(texture_coords.y));
-	if (x >= width || y >= height) {
+	if (texture_coords.x < 0.0 || texture_coords.x >= float(width) ||
+		texture_coords.y < 0.0 || texture_coords.y >= float(height)) {
 		out_color = vec4(0.0, 0.0, 0.0, 0.0);
-	} else {
-		out_color = get_pixel(x, y);
+		return;
 	}
+
+	// Offset so pixel centers are at integers
+	float fx = texture_coords.x - 0.5;
+	float fy = texture_coords.y - 0.5;
+
+	float floor_x = floor(fx);
+	float floor_y = floor(fy);
+	float frac_x = fx - floor_x;
+	float frac_y = fy - floor_y;
+
+	// Clamp to valid pixel range
+	uint x0 = uint(clamp(floor_x, 0.0, float(width - 1)));
+	uint y0 = uint(clamp(floor_y, 0.0, float(height - 1)));
+	uint x1 = uint(clamp(floor_x + 1.0, 0.0, float(width - 1)));
+	uint y1 = uint(clamp(floor_y + 1.0, 0.0, float(height - 1)));
+
+	// Bilinear interpolation
+	vec4 p00 = get_pixel(x0, y0);
+	vec4 p10 = get_pixel(x1, y0);
+	vec4 p01 = get_pixel(x0, y1);
+	vec4 p11 = get_pixel(x1, y1);
+
+	out_color = mix(mix(p00, p10, frac_x), mix(p01, p11, frac_x), frac_y);
 }
