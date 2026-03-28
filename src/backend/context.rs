@@ -408,10 +408,24 @@ impl Context {
 			None => return Ok(()),
 		};
 
-		let frame = window
-			.surface
-			.get_current_texture()
-			.expect("Failed to acquire next frame");
+		let frame = match window.surface.get_current_texture() {
+			Ok(frame) => frame,
+			Err(wgpu::SurfaceError::Timeout) | Err(wgpu::SurfaceError::Outdated) => {
+				// Surface not ready yet, skip this frame.
+				return Ok(());
+			}
+			Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::OutOfMemory) | Err(wgpu::SurfaceError::Other) => {
+				// Reconfigure the surface and retry.
+				let gpu = self.gpu.as_ref().unwrap();
+				let size = glam::UVec2::new(
+					window.window.inner_size().width,
+					window.window.inner_size().height,
+				);
+				configure_surface(size, &window.surface, self.swap_chain_format, &gpu.device);
+				window.window.request_redraw();
+				return Ok(());
+			}
+		};
 
 		let gpu = self.gpu.as_ref().unwrap();
 		let mut encoder = gpu.device.create_command_encoder(&Default::default());
