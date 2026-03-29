@@ -1,14 +1,15 @@
-use crate::ContextHandle;
-use crate::Image;
-use crate::WindowHandle;
-use crate::WindowId;
 use crate::error::{InvalidWindowId, SetImageError};
 use crate::event::Event;
 use crate::event::EventHandlerControlFlow;
 use crate::event::WindowEvent;
 use crate::oneshot;
+use crate::ContextHandle;
+use crate::Image;
+use crate::WindowHandle;
+use crate::WindowId;
 
 use std::sync::mpsc;
+use std::sync::Mutex;
 
 /// Proxy object to interact with a window from a user thread.
 ///
@@ -40,23 +41,42 @@ pub struct WindowProxy {
 /// Doing so from within the global context thread would cause a deadlock.
 #[derive(Clone)]
 pub struct ContextProxy {
-	event_loop: EventLoopProxy,
+	event_loop: winit::event_loop::EventLoopProxy,
+	command_tx: CommandSender,
 	context_thread: std::thread::ThreadId,
 }
 
 /// Dynamic function that can be run by the global context.
 pub type ContextFunction = Box<dyn FnOnce(&mut ContextHandle) + Send>;
 
-/// Internal shorthand for the correct `winit::event::EventLoopProxy`.
-///
-/// Not for use in public APIs.
-type EventLoopProxy = winit::event_loop::EventLoopProxy<ContextFunction>;
+/// Thread-safe cloneable sender for context functions.
+#[derive(Clone)]
+pub(crate) struct CommandSender {
+	inner: std::sync::Arc<Mutex<mpsc::Sender<ContextFunction>>>,
+}
+
+impl CommandSender {
+	pub fn new(tx: mpsc::Sender<ContextFunction>) -> Self {
+		Self {
+			inner: std::sync::Arc::new(Mutex::new(tx)),
+		}
+	}
+
+	pub fn send(&self, function: ContextFunction) -> Result<(), mpsc::SendError<ContextFunction>> {
+		self.inner.lock().unwrap().send(function)
+	}
+}
 
 impl ContextProxy {
 	/// Wrap an [`EventLoopProxy`] in a [`ContextProxy`].
-	pub(crate) fn new(event_loop: EventLoopProxy, context_thread: std::thread::ThreadId) -> Self {
+	pub(crate) fn new(
+		event_loop: winit::event_loop::EventLoopProxy,
+		command_tx: CommandSender,
+		context_thread: std::thread::ThreadId,
+	) -> Self {
 		Self {
 			event_loop,
+			command_tx,
 			context_thread,
 		}
 	}
@@ -114,9 +134,10 @@ impl ContextProxy {
 		F: 'static + FnOnce(&mut ContextHandle) + Send,
 	{
 		let function = Box::new(function);
-		if self.event_loop.send_event(function).is_err() {
+		if self.command_tx.send(function).is_err() {
 			panic!("global context stopped running but somehow the process is still alive");
 		}
+		self.event_loop.wake_up();
 	}
 
 	/// Post a function for execution in the context thread and wait for the return value.

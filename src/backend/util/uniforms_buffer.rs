@@ -30,7 +30,12 @@ impl<T: ToStd140> UniformsBuffer<T> {
 	///
 	/// The bind group layout must have exactly 1 binding for a buffer at index 0.
 	pub fn from_value(device: &wgpu::Device, value: &T, layout: &wgpu::BindGroupLayout) -> Self {
-		let buffer = create_buffer_with_value(device, None, &value.to_std140(), wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
+		let buffer = create_buffer_with_value(
+			device,
+			None,
+			&value.to_std140(),
+			wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+		);
 		let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
 			label: Some("uniforms_bind_group"),
 			layout,

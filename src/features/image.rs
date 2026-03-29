@@ -3,6 +3,7 @@
 use std::ops::Deref;
 
 use crate::error::ImageDataError;
+use crate::error::UnsupportedImageFormat;
 use crate::Alpha;
 use crate::AsImageView;
 use crate::BoxImage;
@@ -10,7 +11,6 @@ use crate::Image;
 use crate::ImageInfo;
 use crate::ImageView;
 use crate::PixelFormat;
-use crate::error::UnsupportedImageFormat;
 
 impl AsImageView for image::DynamicImage {
 	fn as_image_view(&self) -> Result<ImageView, ImageDataError> {
@@ -148,7 +148,10 @@ fn dynamic_image_info(image: &image::DynamicImage) -> Result<ImageInfo, ImageDat
 		image::DynamicImage::ImageLumaA8(x) => info(x),
 		image::DynamicImage::ImageRgb8(x) => info(x),
 		image::DynamicImage::ImageRgba8(x) => info(x),
-		x => Err(UnsupportedImageFormat { format: format!("{:?}", x) }.into()),
+		x => Err(UnsupportedImageFormat {
+			format: format!("{:?}", x),
+		}
+		.into()),
 	}
 }
 
@@ -159,6 +162,9 @@ fn pixel_format<P: image::PixelWithColorType>() -> Result<PixelFormat, ImageData
 		image::ExtendedColorType::La8 => Ok(PixelFormat::MonoAlpha8(Alpha::Unpremultiplied)),
 		image::ExtendedColorType::Rgb8 => Ok(PixelFormat::Rgb8),
 		image::ExtendedColorType::Rgba8 => Ok(PixelFormat::Rgba8(Alpha::Unpremultiplied)),
-		x => Err(UnsupportedImageFormat { format: format!("{:?}", x) }.into()),
+		x => Err(UnsupportedImageFormat {
+			format: format!("{:?}", x),
+		}
+		.into()),
 	}
 }
