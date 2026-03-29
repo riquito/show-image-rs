@@ -53,6 +53,9 @@ pub(crate) struct GpuContext {
 	/// The bind group layout for the image specific bindings.
 	pub image_bind_group_layout: wgpu::BindGroupLayout,
 
+	/// The shared sampler for image textures.
+	pub sampler: wgpu::Sampler,
+
 	/// The render pipeline to use for windows.
 	pub window_pipeline: wgpu::RenderPipeline,
 
@@ -122,6 +125,16 @@ impl GpuContext {
 		let window_bind_group_layout = create_window_bind_group_layout(&device);
 		let image_bind_group_layout = create_image_bind_group_layout(&device);
 
+		let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+			label: Some("image_sampler"),
+			address_mode_u: wgpu::AddressMode::ClampToEdge,
+			address_mode_v: wgpu::AddressMode::ClampToEdge,
+			mag_filter: wgpu::FilterMode::Linear,
+			min_filter: wgpu::FilterMode::Linear,
+			mipmap_filter: wgpu::FilterMode::Linear,
+			..Default::default()
+		});
+
 		let vertex_shader = device.create_shader_module(wgpu::include_spirv!("../../shaders/shader.vert.spv"));
 		let fragment_shader_unorm8 = device.create_shader_module(wgpu::include_spirv!("../../shaders/unorm8.frag.spv"));
 
@@ -153,6 +166,7 @@ impl GpuContext {
 			queue,
 			window_bind_group_layout,
 			image_bind_group_layout,
+			sampler,
 			window_pipeline,
 			#[cfg(feature = "save")]
 			image_pipeline,
@@ -378,7 +392,7 @@ impl Context {
 	/// Upload an image to the GPU.
 	pub fn make_gpu_image(&self, name: impl Into<String>, image: &ImageView) -> GpuImage {
 		let gpu = self.gpu.as_ref().unwrap();
-		GpuImage::from_data(name.into(), &gpu.device, &gpu.image_bind_group_layout, image)
+		GpuImage::from_data(name.into(), &gpu.device, &gpu.queue, &gpu.image_bind_group_layout, &gpu.sampler, image)
 	}
 
 	/// Resize a window.
@@ -883,23 +897,17 @@ fn create_image_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
 				binding: 0,
 				visibility: wgpu::ShaderStages::FRAGMENT,
 				count: None,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
-					min_binding_size: Some(NonZeroU64::new(std::mem::size_of::<super::util::GpuImageUniforms>() as u64).unwrap()),
+				ty: wgpu::BindingType::Texture {
+					sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					view_dimension: wgpu::TextureViewDimension::D2,
+					multisampled: false,
 				},
 			},
 			wgpu::BindGroupLayoutEntry {
 				binding: 1,
 				visibility: wgpu::ShaderStages::FRAGMENT,
 				count: None,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Storage {
-						read_only: true,
-					},
-					has_dynamic_offset: false,
-					min_binding_size: None,
-				},
+				ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
 			},
 		],
 	})

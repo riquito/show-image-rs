@@ -3,7 +3,6 @@ pub use buffer::create_buffer_with_value;
 
 mod gpu_image;
 pub use gpu_image::GpuImage;
-pub use gpu_image::GpuImageUniforms;
 
 #[cfg(feature = "save")]
 mod map_buffer;
