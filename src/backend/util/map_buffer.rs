@@ -1,11 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 /// Synchronously wait for a buffer to be mappable.
-fn wait_for_buffer(
-	device: &wgpu::Device,
-	buffer: wgpu::BufferSlice<'_>,
-	map_mode: wgpu::MapMode,
-) -> Result<(), wgpu::BufferAsyncError> {
+fn wait_for_buffer(device: &wgpu::Device, buffer: wgpu::BufferSlice<'_>, map_mode: wgpu::MapMode) -> Result<(), wgpu::BufferAsyncError> {
 	let result = Arc::new(Mutex::new(None));
 	buffer.map_async(map_mode, {
 		let result = result.clone();

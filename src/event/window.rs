@@ -1,11 +1,9 @@
-use super::AxisId;
 use super::DeviceId;
 use super::ElementState;
 use super::MouseButton;
 use super::MouseButtonState;
 use super::MouseScrollDelta;
 use super::Theme;
-use super::Touch;
 use super::TouchPhase;
 use crate::WindowId;
 
@@ -62,28 +60,18 @@ pub enum WindowEvent {
 	/// A window received mouse wheel input.
 	MouseWheel(WindowMouseWheelEvent),
 
-	/// A window received axis motion input.
-	AxisMotion(WindowAxisMotionEvent),
-
 	/// A window received touchpad pressure input.
 	TouchpadPressure(WindowTouchpadPressureEvent),
 
 	/// A window received a touchpad magnify event.
 	///
 	/// On supported platforms, the event is triggered moving two fingers towards or away from each-other on the touchpad.
-	///
-	/// *Platform specific:* Only available on macOS.
 	TouchpadMagnify(WindowTouchpadMagnifyEvent),
 
 	/// A window received a touchpad rotate event.
 	///
 	/// On supported platforms, the event is triggered putting two fingers on the touchpad and rotating them.
-	///
-	/// *Platform specific:* Only available on macOS.
 	TouchpadRotate(WindowTouchpadRotateEvent),
-
-	/// A window received touch input.
-	Touch(WindowTouchEvent),
 
 	/// The scale factor between logical and physical pixels for a window changed.
 	ScaleFactorChanged(WindowScaleFactorChangedEvent),
@@ -112,11 +100,9 @@ impl WindowEvent {
 			Self::MouseMove(x) => x.window_id,
 			Self::MouseButton(x) => x.window_id,
 			Self::MouseWheel(x) => x.window_id,
-			Self::AxisMotion(x) => x.window_id,
 			Self::TouchpadPressure(x) => x.window_id,
 			Self::TouchpadMagnify(x) => x.window_id,
 			Self::TouchpadRotate(x) => x.window_id,
-			Self::Touch(x) => x.window_id,
 			Self::ScaleFactorChanged(x) => x.window_id,
 			Self::ThemeChanged(x) => x.window_id,
 		}
@@ -170,8 +156,8 @@ pub struct WindowDroppedFileEvent {
 	/// The ID of the window.
 	pub window_id: WindowId,
 
-	/// The path of the file.
-	pub file: PathBuf,
+	/// The paths of the files.
+	pub files: Vec<PathBuf>,
 }
 
 /// A file is being hovered over a window.
@@ -180,8 +166,8 @@ pub struct WindowHoveredFileEvent {
 	/// The ID of the window.
 	pub window_id: WindowId,
 
-	/// The path of the file.
-	pub file: PathBuf,
+	/// The paths of the files.
+	pub files: Vec<PathBuf>,
 }
 
 /// A file that was being hovered over a window was canceled..
@@ -212,7 +198,7 @@ pub struct WindowKeyboardInputEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The received input.
 	pub input: super::KeyEvent,
@@ -244,7 +230,7 @@ pub struct WindowMouseEnterEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The pressed state of all mouse buttons.
 	pub buttons: MouseButtonState,
@@ -257,7 +243,7 @@ pub struct WindowMouseLeaveEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The pressed state of all mouse buttons.
 	pub buttons: MouseButtonState,
@@ -270,7 +256,7 @@ pub struct WindowMouseMoveEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The new position of the cursor in physical pixels, relative to the top-left corner of the window.
 	pub position: glam::Vec2,
@@ -289,7 +275,7 @@ pub struct WindowMouseButtonEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The mouse button that was pressed.
 	pub button: MouseButton,
@@ -314,7 +300,7 @@ pub struct WindowMouseWheelEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The scroll delta of the mouse wheel.
 	pub delta: MouseScrollDelta,
@@ -329,22 +315,6 @@ pub struct WindowMouseWheelEvent {
 	pub buttons: MouseButtonState,
 }
 
-/// A window received axis motion input.
-#[derive(Debug, Clone)]
-pub struct WindowAxisMotionEvent {
-	/// The ID of the window.
-	pub window_id: WindowId,
-
-	/// The device that generated the input.
-	pub device_id: DeviceId,
-
-	/// The axis that as moved.
-	pub axis: AxisId,
-
-	/// The value by which the axis moved.
-	pub value: f64,
-}
-
 /// A window received touchpad pressure input.
 #[derive(Debug, Clone)]
 pub struct WindowTouchpadPressureEvent {
@@ -352,7 +322,7 @@ pub struct WindowTouchpadPressureEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The pressure on the touch pad, in the range 0 to 1.
 	pub pressure: f32,
@@ -368,7 +338,7 @@ pub struct WindowTouchpadMagnifyEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The scaling to be applied.
 	///
@@ -387,7 +357,7 @@ pub struct WindowTouchpadRotateEvent {
 	pub window_id: WindowId,
 
 	/// The device that generated the input.
-	pub device_id: DeviceId,
+	pub device_id: Option<DeviceId>,
 
 	/// The rotation angle in radians.
 	///
@@ -396,16 +366,6 @@ pub struct WindowTouchpadRotateEvent {
 
 	/// The touch phase for the event.
 	pub phase: TouchPhase,
-}
-
-/// A window received touch input.
-#[derive(Debug, Clone)]
-pub struct WindowTouchEvent {
-	/// The ID of the window.
-	pub window_id: WindowId,
-
-	/// The touch input.
-	pub touch: Touch,
 }
 
 /// The scale factor between logical and physical pixels for a window changed.
@@ -444,10 +404,8 @@ impl_from_variant!(WindowEvent::MouseLeave(WindowMouseLeaveEvent));
 impl_from_variant!(WindowEvent::MouseMove(WindowMouseMoveEvent));
 impl_from_variant!(WindowEvent::MouseButton(WindowMouseButtonEvent));
 impl_from_variant!(WindowEvent::MouseWheel(WindowMouseWheelEvent));
-impl_from_variant!(WindowEvent::AxisMotion(WindowAxisMotionEvent));
 impl_from_variant!(WindowEvent::TouchpadPressure(WindowTouchpadPressureEvent));
 impl_from_variant!(WindowEvent::TouchpadMagnify(WindowTouchpadMagnifyEvent));
 impl_from_variant!(WindowEvent::TouchpadRotate(WindowTouchpadRotateEvent));
-impl_from_variant!(WindowEvent::Touch(WindowTouchEvent));
 impl_from_variant!(WindowEvent::ScaleFactorChanged(WindowScaleFactorChangedEvent));
 impl_from_variant!(WindowEvent::ThemeChanged(WindowThemeChangedEvent));

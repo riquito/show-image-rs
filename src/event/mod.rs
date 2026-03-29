@@ -1,6 +1,5 @@
 //! Event types.
 
-pub use winit::event::AxisId;
 pub use winit::event::ButtonId;
 pub use winit::event::DeviceId;
 pub use winit::event::Force;
@@ -9,7 +8,6 @@ pub use winit::event::Modifiers;
 pub use winit::event::MouseScrollDelta;
 pub use winit::event::RawKeyEvent;
 pub use winit::event::StartCause;
-pub use winit::event::Touch;
 pub use winit::event::TouchPhase;
 pub use winit::keyboard::Key;
 pub use winit::keyboard::KeyCode;

@@ -125,7 +125,6 @@ fn main() -> Result<(), String> {
 		Ok(window.proxy())
 	})?;
 
-
 	// Wait for the window to be closed or Escape to be pressed.
 	for event in window.event_channel().map_err(|e| e.to_string())? {
 		if let WindowEvent::KeyboardInput(event) = event {
@@ -137,9 +136,11 @@ fn main() -> Result<(), String> {
 				break;
 			} else if event.input.key_code == Some(VirtualKeyCode::O) && event.input.modifiers == ModifiersState::CTRL {
 				println!("Ctrl+O pressed, toggling overlay");
-				window.run_function_wait(|mut window| {
-					window.toggle_overlay_visible("overlay").unwrap();
-				}).map_err(|e| e.to_string())?;
+				window
+					.run_function_wait(|mut window| {
+						window.toggle_overlay_visible("overlay").unwrap();
+					})
+					.map_err(|e| e.to_string())?;
 			}
 		}
 	}

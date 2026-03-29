@@ -1,10 +1,4 @@
-use core::num::NonZeroU64;
-use crate::ContextProxy;
-use crate::ImageView;
-use crate::WindowHandle;
-use crate::WindowId;
-use crate::WindowOptions;
-use crate::backend::proxy::ContextFunction;
+use crate::backend::proxy::{CommandSender, ContextFunction};
 use crate::backend::util::GpuImage;
 use crate::backend::util::{ToStd140, UniformsBuffer};
 use crate::backend::window::Window;
@@ -15,14 +9,15 @@ use crate::error::GetDeviceError;
 use crate::error::InvalidWindowId;
 use crate::error::NoSuitableAdapterFound;
 use crate::event::{self, Event, EventHandlerControlFlow, WindowEvent};
+use crate::ContextProxy;
+use crate::ImageView;
+use crate::WindowHandle;
+use crate::WindowId;
+use crate::WindowOptions;
+use core::num::NonZeroU64;
 use glam::Affine2;
-use std::sync::Arc;
+use winit::application::ApplicationHandler;
 use winit::event_loop::ActiveEventLoop;
-
-/// Internal shorthand type-alias for the correct [`winit::event_loop::EventLoop`].
-///
-/// Not for use in public APIs.
-type EventLoop = winit::event_loop::EventLoop<ContextFunction>;
 
 /// Internal shorthand for context event handlers.
 ///
@@ -79,10 +74,13 @@ pub(crate) struct Context {
 	///
 	/// Running the event loop consumes it,
 	/// so from that point on this field is `None`.
-	pub event_loop: Option<EventLoop>,
+	pub event_loop: Option<winit::event_loop::EventLoop>,
 
 	/// A proxy object to clone for new requests.
 	pub proxy: ContextProxy,
+
+	/// Receiver for commands from proxies.
+	pub command_rx: std::sync::mpsc::Receiver<ContextFunction>,
 
 	/// The swap chain format to use.
 	pub swap_chain_format: wgpu::TextureFormat,
@@ -112,11 +110,15 @@ pub(crate) struct Context {
 /// To interact with the context from a different thread, use a [`ContextProxy`].
 pub struct ContextHandle<'a> {
 	pub(crate) context: &'a mut Context,
-	pub(crate) event_loop: &'a ActiveEventLoop,
+	pub(crate) event_loop: &'a dyn ActiveEventLoop,
 }
 
 impl GpuContext {
-	pub fn new(instance: &wgpu::Instance, swap_chain_format: wgpu::TextureFormat, surface: &wgpu::Surface<'_>) -> Result<Self, GetDeviceError> {
+	pub fn new(
+		instance: &wgpu::Instance,
+		swap_chain_format: wgpu::TextureFormat,
+		surface: &wgpu::Surface<'_>,
+	) -> Result<Self, GetDeviceError> {
 		let (device, queue) = futures::executor::block_on(get_device(instance, surface))?;
 		device.on_uncaptured_error(Box::new(|error| {
 			panic!("Unhandled WGPU error: {}", error);
@@ -193,8 +195,13 @@ impl Context {
 				},
 			},
 		});
-		let event_loop = winit::event_loop::EventLoop::with_user_event().build().unwrap(); // TODO: Handle error gracefully.
-		let proxy = ContextProxy::new(event_loop.create_proxy(), std::thread::current().id());
+		let event_loop = winit::event_loop::EventLoop::new().unwrap(); // TODO: Handle error gracefully.
+		let (command_tx, command_rx) = std::sync::mpsc::channel();
+		let proxy = ContextProxy::new(
+			event_loop.create_proxy(),
+			CommandSender::new(command_tx),
+			std::thread::current().id(),
+		);
 
 		Ok(Self {
 			unsend: Default::default(),
@@ -202,6 +209,7 @@ impl Context {
 			gpu: None,
 			event_loop: Some(event_loop),
 			proxy,
+			command_rx,
 			swap_chain_format,
 			windows: Vec::new(),
 			mouse_cache: Default::default(),
@@ -228,27 +236,14 @@ impl Context {
 	/// but for portability reasons it is enforced on all platforms.
 	pub fn run(mut self) -> ! {
 		let event_loop = self.event_loop.take().unwrap();
-		// TODO: Migrate to AppHandler trait and report errors.
-		event_loop.run(move |event, event_loop| {
-			let initial_window_count = self.windows.len();
-			self.handle_event(event, event_loop);
-
-			// Check if the event handlers caused the last window(s) to close.
-			// If so, generate an AllWIndowsClosed event for the event handlers.
-			if self.windows.is_empty() && initial_window_count > 0 {
-				self.run_event_handlers(&mut Event::AllWindowsClosed, event_loop);
-				if self.exit_with_last_window {
-					self.exit(0);
-				}
-			}
-		}).unwrap();
+		event_loop.run_app(self).unwrap();
 		panic!("winit event loop stopped");
 	}
 }
 
 impl<'a> ContextHandle<'a> {
 	/// Create a new context handle.
-	fn new(context: &'a mut Context, event_loop: &'a ActiveEventLoop) -> Self {
+	fn new(context: &'a mut Context, event_loop: &'a dyn ActiveEventLoop) -> Self {
 		Self { context, event_loop }
 	}
 
@@ -276,7 +271,12 @@ impl<'a> ContextHandle<'a> {
 
 	/// Get a window handle for the given window ID.
 	pub fn window(&mut self, window_id: WindowId) -> Result<WindowHandle, InvalidWindowId> {
-		let index = self.context.windows.iter().position(|x| x.id() == window_id).ok_or(InvalidWindowId { window_id })?;
+		let index = self
+			.context
+			.windows
+			.iter()
+			.position(|x| x.id() == window_id)
+			.ok_or(InvalidWindowId { window_id })?;
 		Ok(WindowHandle::new(self.reborrow(), index, None))
 	}
 
@@ -323,16 +323,16 @@ impl Context {
 	/// Create a window.
 	fn create_window(
 		&mut self,
-		event_loop: &ActiveEventLoop,
+		event_loop: &dyn ActiveEventLoop,
 		title: impl Into<String>,
 		options: WindowOptions,
 	) -> Result<usize, CreateWindowError> {
 		let fullscreen = if options.fullscreen {
-			Some(winit::window::Fullscreen::Borderless(None))
+			Some(winit::monitor::Fullscreen::Borderless(None))
 		} else {
 			None
 		};
-		let mut window = winit::window::Window::default_attributes()
+		let mut window = winit::window::WindowAttributes::default()
 			.with_title(title)
 			.with_visible(!options.start_hidden)
 			.with_resizable(options.resizable)
@@ -340,10 +340,10 @@ impl Context {
 			.with_fullscreen(fullscreen);
 
 		if let Some(size) = options.size {
-			window = window.with_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1]));
+			window = window.with_surface_size(winit::dpi::PhysicalSize::new(size[0], size[1]));
 		}
 
-		let window = Arc::new(event_loop.create_window(window)?);
+		let window: std::sync::Arc<dyn winit::window::Window> = std::sync::Arc::from(event_loop.create_window(window)?);
 		let surface = self.instance.create_surface(window.clone())?;
 
 		let gpu = match &self.gpu {
@@ -351,10 +351,10 @@ impl Context {
 			None => {
 				let gpu = GpuContext::new(&self.instance, self.swap_chain_format, &surface)?;
 				self.gpu.insert(gpu)
-			}
+			},
 		};
 
-		let size = glam::UVec2::new(window.inner_size().width, window.inner_size().height);
+		let size = glam::UVec2::new(window.surface_size().width, window.surface_size().height);
 		configure_surface(size, &surface, self.swap_chain_format, &gpu.device);
 		let uniforms = UniformsBuffer::from_value(&gpu.device, &WindowUniforms::no_image(), &gpu.window_bind_group_layout);
 
@@ -373,7 +373,9 @@ impl Context {
 		self.windows.push(window);
 		let index = self.windows.len() - 1;
 		if options.default_controls {
-			self.windows[index].event_handlers.push(Box::new(super::window::default_controls_handler));
+			self.windows[index]
+				.event_handlers
+				.push(Box::new(super::window::default_controls_handler));
 		}
 		Ok(index)
 	}
@@ -392,7 +394,14 @@ impl Context {
 	/// Upload an image to the GPU.
 	pub fn make_gpu_image(&self, name: impl Into<String>, image: &ImageView) -> GpuImage {
 		let gpu = self.gpu.as_ref().unwrap();
-		GpuImage::from_data(name.into(), &gpu.device, &gpu.queue, &gpu.image_bind_group_layout, &gpu.sampler, image)
+		GpuImage::from_data(
+			name.into(),
+			&gpu.device,
+			&gpu.queue,
+			&gpu.image_bind_group_layout,
+			&gpu.sampler,
+			image,
+		)
 	}
 
 	/// Resize a window.
@@ -427,27 +436,22 @@ impl Context {
 			Err(e @ wgpu::SurfaceError::Timeout) | Err(e @ wgpu::SurfaceError::Outdated) => {
 				eprintln!("render_window: skipping frame: {e}");
 				return Ok(());
-			}
+			},
 			Err(e) => {
 				eprintln!("render_window: reconfiguring surface: {e}");
 				let gpu = self.gpu.as_ref().unwrap();
-				let size = glam::UVec2::new(
-					window.window.inner_size().width,
-					window.window.inner_size().height,
-				);
+				let size = glam::UVec2::new(window.window.surface_size().width, window.window.surface_size().height);
 				configure_surface(size, &window.surface, self.swap_chain_format, &gpu.device);
 				window.window.request_redraw();
 				return Ok(());
-			}
+			},
 		};
 
 		let gpu = self.gpu.as_ref().unwrap();
 		let mut encoder = gpu.device.create_command_encoder(&Default::default());
 
 		if window.uniforms.is_dirty() {
-			window
-				.uniforms
-				.update_from(&gpu.device, &mut encoder, &window.calculate_uniforms());
+			window.uniforms.update_from(&gpu.device, &mut encoder, &window.calculate_uniforms());
 		}
 
 		render_pass(
@@ -540,7 +544,14 @@ impl Context {
 		if overlays {
 			for (_name, overlay) in &window.overlays {
 				if overlay.visible {
-					render_pass(&mut encoder, &gpu.image_pipeline, &window_uniforms, &overlay.image, None, &render_target);
+					render_pass(
+						&mut encoder,
+						&gpu.image_pipeline,
+						&window_uniforms,
+						&overlay.image,
+						None,
+						&render_target,
+					);
 				}
 			}
 		}
@@ -582,33 +593,9 @@ impl Context {
 		Ok(Some((image.name().to_string(), crate::BoxImage::new(info, data))))
 	}
 
-	/// Handle an event from the event loop.
-	fn handle_event(
-		&mut self,
-		event: winit::event::Event<ContextFunction>,
-		event_loop: &ActiveEventLoop,
-	) {
-		event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-
-		// Split between Event<ContextFunction> and ContextFunction commands.
-		let event = match super::event::map_nonuser_event(event) {
-			Ok(event) => event,
-			Err(function) => {
-				(function)(&mut ContextHandle::new(self, event_loop));
-				return;
-			},
-		};
-
-		self.mouse_cache.handle_event(&event);
-		if let winit::event::Event::WindowEvent { event: winit::event::WindowEvent::ModifiersChanged(modifiers), .. } = &event {
-			self.modifiers = modifiers.clone();
-		}
-
-		// Convert to own event type.
-		let mut event = match super::event::convert_winit_event(event, &self.mouse_cache, self.modifiers.state()) {
-			Some(x) => x,
-			None => return,
-		};
+	/// Handle a converted event.
+	fn handle_converted_event(&mut self, mut event: Event, event_loop: &dyn ActiveEventLoop) {
+		let initial_window_count = self.windows.len();
 
 		// If we have nothing more to do, clean the background tasks.
 		if let Event::MainEventsCleared = &event {
@@ -660,10 +647,18 @@ impl Context {
 			},
 			_ => {},
 		}
+
+		// Check if the event handlers caused the last window(s) to close.
+		if self.windows.is_empty() && initial_window_count > 0 {
+			self.run_event_handlers(&mut Event::AllWindowsClosed, event_loop);
+			if self.exit_with_last_window {
+				self.exit(0);
+			}
+		}
 	}
 
 	/// Run global event handlers.
-	fn run_event_handlers(&mut self, event: &mut Event, event_loop: &ActiveEventLoop) {
+	fn run_event_handlers(&mut self, event: &mut Event, event_loop: &dyn ActiveEventLoop) {
 		use super::util::RetainMut;
 
 		// Event handlers could potentially modify the list of event handlers.
@@ -692,7 +687,7 @@ impl Context {
 	}
 
 	/// Run window-specific event handlers.
-	fn run_window_event_handlers(&mut self, event: &mut WindowEvent, event_loop: &ActiveEventLoop) -> bool {
+	fn run_window_event_handlers(&mut self, event: &mut WindowEvent, event_loop: &dyn ActiveEventLoop) -> bool {
 		use super::util::RetainMut;
 
 		let window_index = match self.windows.iter().position(|x| x.id() == event.window_id()) {
@@ -791,6 +786,63 @@ impl Context {
 	}
 }
 
+impl ApplicationHandler for Context {
+	fn can_create_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
+		// Nothing to do - surfaces are created on window creation.
+	}
+
+	fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: winit::event::StartCause) {
+		event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+		self.handle_converted_event(Event::NewEvents, event_loop);
+	}
+
+	fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, window_id: winit::window::WindowId, event: winit::event::WindowEvent) {
+		event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+
+		// Update mouse cache before conversion.
+		self.mouse_cache.handle_window_event(window_id, &event);
+
+		// Track modifier state.
+		if let winit::event::WindowEvent::ModifiersChanged(modifiers) = &event {
+			self.modifiers = *modifiers;
+		}
+
+		// Convert to our event type.
+		if let Some(event) = super::event::convert_winit_window_event(window_id, event, &self.mouse_cache, self.modifiers.state()) {
+			self.handle_converted_event(event.into(), event_loop);
+		}
+	}
+
+	fn device_event(
+		&mut self,
+		event_loop: &dyn ActiveEventLoop,
+		device_id: Option<winit::event::DeviceId>,
+		event: winit::event::DeviceEvent,
+	) {
+		let event = super::event::convert_winit_device_event(device_id, event);
+		self.handle_converted_event(event.into(), event_loop);
+	}
+
+	fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+		self.handle_converted_event(Event::MainEventsCleared, event_loop);
+	}
+
+	fn suspended(&mut self, event_loop: &dyn ActiveEventLoop) {
+		self.handle_converted_event(Event::Suspended, event_loop);
+	}
+
+	fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
+		self.handle_converted_event(Event::Resumed, event_loop);
+	}
+
+	fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+		// Drain all pending commands from the channel.
+		while let Ok(function) = self.command_rx.try_recv() {
+			(function)(&mut ContextHandle::new(self, event_loop));
+		}
+	}
+}
+
 fn select_backend() -> wgpu::Backends {
 	let backend = std::env::var_os("WGPU_BACKEND").unwrap_or_else(|| "primary".into());
 	let backend = match backend.to_str() {
@@ -798,7 +850,7 @@ fn select_backend() -> wgpu::Backends {
 		None => {
 			eprintln!("Unknown WGPU_BACKEND: {:?}", backend);
 			std::process::exit(1);
-		}
+		},
 	};
 
 	if backend.eq_ignore_ascii_case("primary") {
@@ -829,7 +881,7 @@ fn select_power_preference() -> wgpu::PowerPreference {
 		None => {
 			eprintln!("Unknown WGPU_POWER_PREF: {:?}", power_pref);
 			std::process::exit(1);
-		}
+		},
 	};
 
 	if power_pref.eq_ignore_ascii_case("low") {
@@ -978,12 +1030,7 @@ fn create_render_pipeline(
 }
 
 /// Create a swap chain for a surface.
-fn configure_surface(
-	size: glam::UVec2,
-	surface: &wgpu::Surface,
-	format: wgpu::TextureFormat,
-	device: &wgpu::Device,
-) {
+fn configure_surface(size: glam::UVec2, surface: &wgpu::Surface, format: wgpu::TextureFormat, device: &wgpu::Device) {
 	let config = wgpu::SurfaceConfiguration {
 		usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 		format,

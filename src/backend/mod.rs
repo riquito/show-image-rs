@@ -13,7 +13,7 @@ pub use window::WindowOptions;
 
 use crate::error;
 use context::Context;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 static CONTEXT_PROXY: std::sync::OnceLock<ContextProxy> = std::sync::OnceLock::new();
 
@@ -39,7 +39,7 @@ fn initialize_context_or_exit() -> Context {
 			#[cfg(any(target_os = "android", target_os = "linux"))]
 			eprintln!("show-image: You may be missing the correct driver. Consider installing the Vulkan driver for your GPU.");
 			std::process::exit(-2);
-		}
+		},
 	}
 }
 

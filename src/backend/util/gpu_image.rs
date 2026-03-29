@@ -164,7 +164,7 @@ fn convert_to_rgba8(image: &ImageView) -> Vec<u8> {
 					rgba[dst + 1] = v;
 					rgba[dst + 2] = v;
 					rgba[dst + 3] = 255;
-				}
+				},
 				PixelFormat::MonoAlpha8(Alpha::Unpremultiplied) => {
 					let v = data[src];
 					let a = data[src + 1];
@@ -172,7 +172,7 @@ fn convert_to_rgba8(image: &ImageView) -> Vec<u8> {
 					rgba[dst + 1] = v;
 					rgba[dst + 2] = v;
 					rgba[dst + 3] = a;
-				}
+				},
 				PixelFormat::MonoAlpha8(Alpha::Premultiplied) => {
 					let a = data[src + 1];
 					let v = if a == 0 { 0 } else { ((data[src] as u16 * 255) / a as u16) as u8 };
@@ -180,19 +180,19 @@ fn convert_to_rgba8(image: &ImageView) -> Vec<u8> {
 					rgba[dst + 1] = v;
 					rgba[dst + 2] = v;
 					rgba[dst + 3] = a;
-				}
+				},
 				PixelFormat::Bgr8 => {
 					rgba[dst] = data[src + 2];
 					rgba[dst + 1] = data[src + 1];
 					rgba[dst + 2] = data[src];
 					rgba[dst + 3] = 255;
-				}
+				},
 				PixelFormat::Bgra8(Alpha::Unpremultiplied) => {
 					rgba[dst] = data[src + 2];
 					rgba[dst + 1] = data[src + 1];
 					rgba[dst + 2] = data[src];
 					rgba[dst + 3] = data[src + 3];
-				}
+				},
 				PixelFormat::Bgra8(Alpha::Premultiplied) => {
 					let a = data[src + 3];
 					if a == 0 {
@@ -205,19 +205,19 @@ fn convert_to_rgba8(image: &ImageView) -> Vec<u8> {
 						rgba[dst + 2] = ((data[src] as u16 * 255) / a as u16) as u8;
 					}
 					rgba[dst + 3] = a;
-				}
+				},
 				PixelFormat::Rgb8 => {
 					rgba[dst] = data[src];
 					rgba[dst + 1] = data[src + 1];
 					rgba[dst + 2] = data[src + 2];
 					rgba[dst + 3] = 255;
-				}
+				},
 				PixelFormat::Rgba8(Alpha::Unpremultiplied) => {
 					rgba[dst] = data[src];
 					rgba[dst + 1] = data[src + 1];
 					rgba[dst + 2] = data[src + 2];
 					rgba[dst + 3] = data[src + 3];
-				}
+				},
 				PixelFormat::Rgba8(Alpha::Premultiplied) => {
 					let a = data[src + 3];
 					if a == 0 {
@@ -230,7 +230,7 @@ fn convert_to_rgba8(image: &ImageView) -> Vec<u8> {
 						rgba[dst + 2] = ((data[src + 2] as u16 * 255) / a as u16) as u8;
 					}
 					rgba[dst + 3] = a;
-				}
+				},
 			}
 		}
 	}

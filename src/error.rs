@@ -6,7 +6,7 @@ use crate::WindowId;
 #[derive(Debug)]
 pub enum CreateWindowError {
 	/// The underlying call to `winit` reported an error.
-	Winit(winit::error::OsError),
+	Winit(winit::error::RequestError),
 
 	/// Failed to get a suitable GPU device.
 	GetDevice(GetDeviceError),
@@ -81,8 +81,8 @@ pub enum SaveImageError {
 	PngError(png::EncodingError),
 }
 
-impl From<winit::error::OsError> for CreateWindowError {
-	fn from(other: winit::error::OsError) -> Self {
+impl From<winit::error::RequestError> for CreateWindowError {
+	fn from(other: winit::error::RequestError) -> Self {
 		Self::Winit(other)
 	}
 }
