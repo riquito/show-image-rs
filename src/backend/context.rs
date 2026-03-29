@@ -1,4 +1,9 @@
 use core::num::NonZeroU64;
+use crate::ContextProxy;
+use crate::ImageView;
+use crate::WindowHandle;
+use crate::WindowId;
+use crate::WindowOptions;
 use crate::backend::proxy::ContextFunction;
 use crate::backend::util::GpuImage;
 use crate::backend::util::{ToStd140, UniformsBuffer};
@@ -10,12 +15,9 @@ use crate::error::GetDeviceError;
 use crate::error::InvalidWindowId;
 use crate::error::NoSuitableAdapterFound;
 use crate::event::{self, Event, EventHandlerControlFlow, WindowEvent};
-use crate::ContextProxy;
-use crate::ImageView;
-use crate::WindowHandle;
-use crate::WindowId;
-use crate::WindowOptions;
 use glam::Affine2;
+use std::sync::Arc;
+use winit::event_loop::ActiveEventLoop;
 
 /// Internal shorthand type-alias for the correct [`winit::event_loop::EventLoop`].
 ///
@@ -26,11 +28,6 @@ type EventLoop = winit::event_loop::EventLoop<ContextFunction>;
 ///
 /// Not for use in public APIs.
 type DynContextEventHandler = dyn FnMut(&mut ContextHandle, &mut Event, &mut event::EventHandlerControlFlow);
-
-/// Internal shorthand type-alias for the correct [`winit::event_loop::EventLoopWindowTarget`].
-///
-/// Not for use in public APIs.
-type EventLoopWindowTarget = winit::event_loop::EventLoopWindowTarget<ContextFunction>;
 
 impl From<crate::Color> for wgpu::Color {
 	fn from(other: crate::Color) -> Self {
@@ -55,6 +52,9 @@ pub(crate) struct GpuContext {
 
 	/// The bind group layout for the image specific bindings.
 	pub image_bind_group_layout: wgpu::BindGroupLayout,
+
+	/// The shared sampler for image textures.
+	pub sampler: wgpu::Sampler,
 
 	/// The render pipeline to use for windows.
 	pub window_pipeline: wgpu::RenderPipeline,
@@ -93,6 +93,9 @@ pub(crate) struct Context {
 	/// Cache for mouse state.
 	pub mouse_cache: super::mouse_cache::MouseCache,
 
+	/// Cache for last-known modifiers state.
+	pub modifiers: winit::event::Modifiers,
+
 	/// If true, exit the program when the last window closes.
 	pub exit_with_last_window: bool,
 
@@ -109,11 +112,11 @@ pub(crate) struct Context {
 /// To interact with the context from a different thread, use a [`ContextProxy`].
 pub struct ContextHandle<'a> {
 	pub(crate) context: &'a mut Context,
-	pub(crate) event_loop: &'a EventLoopWindowTarget,
+	pub(crate) event_loop: &'a ActiveEventLoop,
 }
 
 impl GpuContext {
-	pub fn new(instance: &wgpu::Instance, swap_chain_format: wgpu::TextureFormat, surface: &wgpu::Surface) -> Result<Self, GetDeviceError> {
+	pub fn new(instance: &wgpu::Instance, swap_chain_format: wgpu::TextureFormat, surface: &wgpu::Surface<'_>) -> Result<Self, GetDeviceError> {
 		let (device, queue) = futures::executor::block_on(get_device(instance, surface))?;
 		device.on_uncaptured_error(Box::new(|error| {
 			panic!("Unhandled WGPU error: {}", error);
@@ -121,6 +124,16 @@ impl GpuContext {
 
 		let window_bind_group_layout = create_window_bind_group_layout(&device);
 		let image_bind_group_layout = create_image_bind_group_layout(&device);
+
+		let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+			label: Some("image_sampler"),
+			address_mode_u: wgpu::AddressMode::ClampToEdge,
+			address_mode_v: wgpu::AddressMode::ClampToEdge,
+			mag_filter: wgpu::FilterMode::Linear,
+			min_filter: wgpu::FilterMode::Linear,
+			mipmap_filter: wgpu::FilterMode::Linear,
+			..Default::default()
+		});
 
 		let vertex_shader = device.create_shader_module(wgpu::include_spirv!("../../shaders/shader.vert.spv"));
 		let fragment_shader_unorm8 = device.create_shader_module(wgpu::include_spirv!("../../shaders/unorm8.frag.spv"));
@@ -153,6 +166,7 @@ impl GpuContext {
 			queue,
 			window_bind_group_layout,
 			image_bind_group_layout,
+			sampler,
 			window_pipeline,
 			#[cfg(feature = "save")]
 			image_pipeline,
@@ -167,11 +181,19 @@ impl Context {
 	/// but they must be run from the main thread and the [`run`](Self::run) function never returns.
 	/// So it is not possible to *run* more than one context.
 	pub fn new(swap_chain_format: wgpu::TextureFormat) -> Result<Self, GetDeviceError> {
-		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+		let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
 			backends: select_backend(),
-			dx12_shader_compiler: wgpu::Dx12Compiler::Fxc,
+			flags: wgpu::InstanceFlags::empty(),
+			backend_options: wgpu::BackendOptions {
+				gl: wgpu::GlBackendOptions {
+					gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+				},
+				dx12: wgpu::Dx12BackendOptions {
+					shader_compiler: wgpu::Dx12Compiler::StaticDxc,
+				},
+			},
 		});
-		let event_loop = winit::event_loop::EventLoopBuilder::with_user_event().build();
+		let event_loop = winit::event_loop::EventLoop::with_user_event().build().unwrap(); // TODO: Handle error gracefully.
 		let proxy = ContextProxy::new(event_loop.create_proxy(), std::thread::current().id());
 
 		Ok(Self {
@@ -183,6 +205,7 @@ impl Context {
 			swap_chain_format,
 			windows: Vec::new(),
 			mouse_cache: Default::default(),
+			modifiers: winit::event::Modifiers::default(),
 			exit_with_last_window: false,
 			event_handlers: Vec::new(),
 			background_tasks: Vec::new(),
@@ -205,9 +228,10 @@ impl Context {
 	/// but for portability reasons it is enforced on all platforms.
 	pub fn run(mut self) -> ! {
 		let event_loop = self.event_loop.take().unwrap();
-		event_loop.run(move |event, event_loop, control_flow| {
+		// TODO: Migrate to AppHandler trait and report errors.
+		event_loop.run(move |event, event_loop| {
 			let initial_window_count = self.windows.len();
-			self.handle_event(event, event_loop, control_flow);
+			self.handle_event(event, event_loop);
 
 			// Check if the event handlers caused the last window(s) to close.
 			// If so, generate an AllWIndowsClosed event for the event handlers.
@@ -217,13 +241,14 @@ impl Context {
 					self.exit(0);
 				}
 			}
-		});
+		}).unwrap();
+		panic!("winit event loop stopped");
 	}
 }
 
 impl<'a> ContextHandle<'a> {
 	/// Create a new context handle.
-	fn new(context: &'a mut Context, event_loop: &'a EventLoopWindowTarget) -> Self {
+	fn new(context: &'a mut Context, event_loop: &'a ActiveEventLoop) -> Self {
 		Self { context, event_loop }
 	}
 
@@ -298,7 +323,7 @@ impl Context {
 	/// Create a window.
 	fn create_window(
 		&mut self,
-		event_loop: &EventLoopWindowTarget,
+		event_loop: &ActiveEventLoop,
 		title: impl Into<String>,
 		options: WindowOptions,
 	) -> Result<usize, CreateWindowError> {
@@ -307,7 +332,7 @@ impl Context {
 		} else {
 			None
 		};
-		let mut window = winit::window::WindowBuilder::new()
+		let mut window = winit::window::Window::default_attributes()
 			.with_title(title)
 			.with_visible(!options.start_hidden)
 			.with_resizable(options.resizable)
@@ -318,9 +343,8 @@ impl Context {
 			window = window.with_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1]));
 		}
 
-		let window = window.build(event_loop)?;
-		let surface = unsafe { self.instance.create_surface(&window)? };
-
+		let window = Arc::new(event_loop.create_window(window)?);
+		let surface = self.instance.create_surface(window.clone())?;
 
 		let gpu = match &self.gpu {
 			Some(x) => x,
@@ -368,7 +392,7 @@ impl Context {
 	/// Upload an image to the GPU.
 	pub fn make_gpu_image(&self, name: impl Into<String>, image: &ImageView) -> GpuImage {
 		let gpu = self.gpu.as_ref().unwrap();
-		GpuImage::from_data(name.into(), &gpu.device, &gpu.image_bind_group_layout, image)
+		GpuImage::from_data(name.into(), &gpu.device, &gpu.queue, &gpu.image_bind_group_layout, &gpu.sampler, image)
 	}
 
 	/// Resize a window.
@@ -398,10 +422,24 @@ impl Context {
 			None => return Ok(()),
 		};
 
-		let frame = window
-			.surface
-			.get_current_texture()
-			.expect("Failed to acquire next frame");
+		let frame = match window.surface.get_current_texture() {
+			Ok(frame) => frame,
+			Err(e @ wgpu::SurfaceError::Timeout) | Err(e @ wgpu::SurfaceError::Outdated) => {
+				eprintln!("render_window: skipping frame: {e}");
+				return Ok(());
+			}
+			Err(e) => {
+				eprintln!("render_window: reconfiguring surface: {e}");
+				let gpu = self.gpu.as_ref().unwrap();
+				let size = glam::UVec2::new(
+					window.window.inner_size().width,
+					window.window.inner_size().height,
+				);
+				configure_surface(size, &window.surface, self.swap_chain_format, &gpu.device);
+				window.window.request_redraw();
+				return Ok(());
+			}
+		};
 
 		let gpu = self.gpu.as_ref().unwrap();
 		let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -488,6 +526,7 @@ impl Context {
 			mip_level_count: None,
 			base_array_layer: 0,
 			array_layer_count: None,
+			usage: Some(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC),
 		});
 
 		render_pass(
@@ -514,15 +553,15 @@ impl Context {
 		});
 
 		encoder.copy_texture_to_buffer(
-			wgpu::ImageCopyTexture {
+			wgpu::TexelCopyTextureInfo {
 				texture: &target,
 				mip_level: 0,
 				origin: wgpu::Origin3d::ZERO,
 				aspect: wgpu::TextureAspect::All,
 			},
-			wgpu::ImageCopyBuffer {
+			wgpu::TexelCopyBufferInfo {
 				buffer: &buffer,
-				layout: wgpu::ImageDataLayout {
+				layout: wgpu::TexelCopyBufferLayout {
 					offset: 0,
 					bytes_per_row: Some(bytes_per_row),
 					rows_per_image: Some(image.info().size.y),
@@ -547,10 +586,9 @@ impl Context {
 	fn handle_event(
 		&mut self,
 		event: winit::event::Event<ContextFunction>,
-		event_loop: &EventLoopWindowTarget,
-		control_flow: &mut winit::event_loop::ControlFlow,
+		event_loop: &ActiveEventLoop,
 	) {
-		*control_flow = winit::event_loop::ControlFlow::Wait;
+		event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
 
 		// Split between Event<ContextFunction> and ContextFunction commands.
 		let event = match super::event::map_nonuser_event(event) {
@@ -562,9 +600,12 @@ impl Context {
 		};
 
 		self.mouse_cache.handle_event(&event);
+		if let winit::event::Event::WindowEvent { event: winit::event::WindowEvent::ModifiersChanged(modifiers), .. } = &event {
+			self.modifiers = modifiers.clone();
+		}
 
 		// Convert to own event type.
-		let mut event = match super::event::convert_winit_event(event, &self.mouse_cache) {
+		let mut event = match super::event::convert_winit_event(event, &self.mouse_cache, self.modifiers.state()) {
 			Some(x) => x,
 			None => return,
 		};
@@ -588,14 +629,20 @@ impl Context {
 		// Perform default actions for events.
 		match event {
 			#[cfg(feature = "save")]
-			#[allow(deprecated)]
 			Event::WindowEvent(WindowEvent::KeyboardInput(event)) => {
-				if event.input.state.is_pressed() && event.input.key_code == Some(event::VirtualKeyCode::S) {
-					let overlays = event.input.modifiers.alt();
-					let modifiers = event.input.modifiers & !event::ModifiersState::ALT;
-					if modifiers == event::ModifiersState::CTRL {
+				// TODO: Eww.. testing for keys this way is horrible.
+				let character = match &event.input.logical_key {
+					event::Key::Character(c) => Some(c.as_str()),
+					event::Key::Named(_) => None,
+					event::Key::Unidentified(_) => None,
+					event::Key::Dead(_) => None,
+				};
+				if event.input.state.is_pressed() && character == Some("s") {
+					let overlays = self.modifiers.state().contains(event::ModifiersState::ALT);
+					let modifiers = self.modifiers.state() & !event::ModifiersState::ALT;
+					if modifiers == event::ModifiersState::CONTROL {
 						self.save_image_prompt(event.window_id, overlays);
-					} else if modifiers == event::ModifiersState::CTRL | event::ModifiersState::SHIFT {
+					} else if modifiers == event::ModifiersState::CONTROL | event::ModifiersState::SHIFT {
 						self.save_image(event.window_id, overlays);
 					}
 				}
@@ -616,7 +663,7 @@ impl Context {
 	}
 
 	/// Run global event handlers.
-	fn run_event_handlers(&mut self, event: &mut Event, event_loop: &EventLoopWindowTarget) {
+	fn run_event_handlers(&mut self, event: &mut Event, event_loop: &ActiveEventLoop) {
 		use super::util::RetainMut;
 
 		// Event handlers could potentially modify the list of event handlers.
@@ -645,7 +692,7 @@ impl Context {
 	}
 
 	/// Run window-specific event handlers.
-	fn run_window_event_handlers(&mut self, event: &mut WindowEvent, event_loop: &EventLoopWindowTarget) -> bool {
+	fn run_window_event_handlers(&mut self, event: &mut WindowEvent, event_loop: &ActiveEventLoop) -> bool {
 		use super::util::RetainMut;
 
 		let window_index = match self.windows.iter().position(|x| x.id() == event.window_id()) {
@@ -763,7 +810,8 @@ fn select_backend() -> wgpu::Backends {
 	} else if backend.eq_ignore_ascii_case("dx12") {
 		wgpu::Backends::DX12
 	} else if backend.eq_ignore_ascii_case("dx11") {
-		wgpu::Backends::DX11
+		eprintln!("WGPU_BACKEND DX11 was removed, consider using DX12");
+		std::process::exit(1);
 	} else if backend.eq_ignore_ascii_case("gl") {
 		wgpu::Backends::GL
 	} else if backend.eq_ignore_ascii_case("webgpu") {
@@ -795,7 +843,7 @@ fn select_power_preference() -> wgpu::PowerPreference {
 }
 
 /// Get a wgpu device to use.
-async fn get_device(instance: &wgpu::Instance, surface: &wgpu::Surface) -> Result<(wgpu::Device, wgpu::Queue), GetDeviceError> {
+async fn get_device(instance: &wgpu::Instance, surface: &wgpu::Surface<'_>) -> Result<(wgpu::Device, wgpu::Queue), GetDeviceError> {
 	// Find a suitable display adapter.
 	let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
 		power_preference: select_power_preference(),
@@ -804,13 +852,16 @@ async fn get_device(instance: &wgpu::Instance, surface: &wgpu::Surface) -> Resul
 	});
 
 	let adapter = adapter.await.ok_or(NoSuitableAdapterFound)?;
+	#[cfg(feature = "log")]
+	log::info!("Selected GPU adapter: {:?}", adapter.get_info());
 
 	// Create the logical device and command queue
 	let device = adapter.request_device(
 		&wgpu::DeviceDescriptor {
 			label: Some("show-image"),
-			limits: wgpu::Limits::default(),
-			features: wgpu::Features::default(),
+			required_limits: wgpu::Limits::default(),
+			required_features: wgpu::Features::default(),
+			memory_hints: wgpu::MemoryHints::Performance,
 		},
 		None,
 	);
@@ -846,23 +897,17 @@ fn create_image_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
 				binding: 0,
 				visibility: wgpu::ShaderStages::FRAGMENT,
 				count: None,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
-					min_binding_size: Some(NonZeroU64::new(std::mem::size_of::<super::util::GpuImageUniforms>() as u64).unwrap()),
+				ty: wgpu::BindingType::Texture {
+					sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					view_dimension: wgpu::TextureViewDimension::D2,
+					multisampled: false,
 				},
 			},
 			wgpu::BindGroupLayoutEntry {
 				binding: 1,
 				visibility: wgpu::ShaderStages::FRAGMENT,
 				count: None,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Storage {
-						read_only: true,
-					},
-					has_dynamic_offset: false,
-					min_binding_size: None,
-				},
+				ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
 			},
 		],
 	})
@@ -881,12 +926,20 @@ fn create_render_pipeline(
 		layout: Some(layout),
 		vertex: wgpu::VertexState {
 			module: vertex_shader,
-			entry_point: "main",
+			entry_point: Some("main"),
+			compilation_options: wgpu::PipelineCompilationOptions {
+				constants: &std::collections::HashMap::new(),
+				zero_initialize_workgroup_memory: true,
+			},
 			buffers: &[],
 		},
 		fragment: Some(wgpu::FragmentState {
 			module: fragment_shader,
-			entry_point: "main",
+			entry_point: Some("main"),
+			compilation_options: wgpu::PipelineCompilationOptions {
+				constants: &std::collections::HashMap::new(),
+				zero_initialize_workgroup_memory: true,
+			},
 			targets: &[Some(wgpu::ColorTargetState {
 				format: swap_chain_format,
 				blend: Some(wgpu::BlendState {
@@ -920,6 +973,7 @@ fn create_render_pipeline(
 			alpha_to_coverage_enabled: false,
 		},
 		multiview: None,
+		cache: None,
 	})
 }
 
@@ -935,9 +989,10 @@ fn configure_surface(
 		format,
 		width: size.x,
 		height: size.y,
-		present_mode: wgpu::PresentMode::AutoVsync,
+		present_mode: wgpu::PresentMode::Mailbox,
 		alpha_mode: wgpu::CompositeAlphaMode::Auto,
 		view_formats: vec![format],
+		desired_maximum_frame_latency: 2,
 	};
 	surface.configure(device, &config);
 }
@@ -961,9 +1016,14 @@ fn render_pass(
 		color_attachments: &[Some(wgpu::RenderPassColorAttachment {
 			view: target,
 			resolve_target: None,
-			ops: wgpu::Operations { load, store: true },
+			ops: wgpu::Operations {
+				load,
+				store: wgpu::StoreOp::Store,
+			},
 		})],
 		depth_stencil_attachment: None,
+		timestamp_writes: None,
+		occlusion_query_set: None,
 	});
 
 	render_pass.set_pipeline(render_pipeline);

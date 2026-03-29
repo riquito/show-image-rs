@@ -2,7 +2,6 @@ use super::AxisId;
 use super::ButtonId;
 use super::DeviceId;
 use super::ElementState;
-use super::KeyboardInput;
 use super::MouseScrollDelta;
 
 /// Raw hardware events that are not associated with any particular window.
@@ -34,9 +33,6 @@ pub enum DeviceEvent {
 
 	/// A device generated keyboard input.
 	KeyboardInput(DeviceKeyboardInputEvent),
-
-	/// A device generated text input.
-	TextInput(DeviceTextInputEvent),
 }
 
 #[derive(Debug, Clone)]
@@ -106,23 +102,13 @@ pub struct DeviceButtonEvent {
 }
 
 /// A device generated keyboard input.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DeviceKeyboardInputEvent {
 	/// The ID of the device.
 	pub device_id: DeviceId,
 
-	/// The keyboard input.
-	pub input: KeyboardInput,
-}
-
-/// A device generated text input.
-#[derive(Debug, Clone)]
-pub struct DeviceTextInputEvent {
-	/// The ID of the device.
-	pub device_id: DeviceId,
-
-	/// The unicode codepoint that was generated.
-	pub codepoint: char,
+	/// The event that occured.
+	pub input: super::RawKeyEvent,
 }
 
 impl_from_variant!(DeviceEvent::Added(DeviceAddedEvent));
@@ -132,4 +118,3 @@ impl_from_variant!(DeviceEvent::MouseWheel(DeviceMouseWheelEvent));
 impl_from_variant!(DeviceEvent::Motion(DeviceMotionEvent));
 impl_from_variant!(DeviceEvent::Button(DeviceButtonEvent));
 impl_from_variant!(DeviceEvent::KeyboardInput(DeviceKeyboardInputEvent));
-impl_from_variant!(DeviceEvent::TextInput(DeviceTextInputEvent));

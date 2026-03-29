@@ -13,6 +13,7 @@ use crate::event::WindowEvent;
 use glam::Vec3;
 use glam::{Affine2, Vec2};
 use indexmap::IndexMap;
+use std::sync::Arc;
 
 /// Internal shorthand for window event handlers.
 type DynWindowEventHandler = dyn FnMut(WindowHandle, &mut WindowEvent, &mut EventHandlerControlFlow);
@@ -20,7 +21,7 @@ type DynWindowEventHandler = dyn FnMut(WindowHandle, &mut WindowEvent, &mut Even
 /// Window capable of displaying images using wgpu.
 pub(crate) struct Window {
 	/// The winit window.
-	pub window: winit::window::Window,
+	pub window: Arc<winit::window::Window>,
 
 	/// If true, preserve the aspect ratio of images.
 	pub preserve_aspect_ratio: bool,
@@ -29,7 +30,7 @@ pub(crate) struct Window {
 	pub background_color: Color,
 
 	/// The wgpu surface to render to.
-	pub surface: wgpu::Surface,
+	pub surface: wgpu::Surface<'static>,
 
 	/// The window specific uniforms for the render pipeline.
 	pub uniforms: UniformsBuffer<WindowUniforms>,
@@ -218,7 +219,10 @@ impl<'a> WindowHandle<'a> {
 	/// Some window managers may ignore this property.
 	pub fn set_inner_size(&mut self, size: impl Into<glam::UVec2>) {
 		let size = size.into();
-		self.window_mut().window.set_inner_size(winit::dpi::PhysicalSize::new(size.x, size.y));
+		match self.window_mut().window.request_inner_size(winit::dpi::PhysicalSize::new(size.x, size.y)) {
+			Some(_new_size) => (),
+			None => (),
+		};
 		self.window().window.request_redraw();
 	}
 
@@ -751,7 +755,12 @@ pub(super) fn default_controls_handler(mut window: WindowHandle, event: &mut cra
 		WindowEvent::MouseWheel(event) => {
 			let delta = match event.delta {
 				winit::event::MouseScrollDelta::LineDelta(_x, y) => y,
-				winit::event::MouseScrollDelta::PixelDelta(delta) => delta.y as f32 / 20.0,
+				winit::event::MouseScrollDelta::PixelDelta(delta) => {
+					let d = delta.y as f32;
+					// Fall back to x axis if y is zero (e.g. touchpad pinch on some Wayland compositors)
+					let d = if d == 0.0 { delta.x as f32 } else { d };
+					d / 20.0
+				}
 			};
 			let scale = 1.1f32.powf(delta);
 
@@ -765,6 +774,14 @@ pub(super) fn default_controls_handler(mut window: WindowHandle, event: &mut cra
 			if event.buttons.is_pressed(crate::event::MouseButton::Left) {
 				let translation = (event.position - event.prev_position) / window.inner_size().as_vec2();
 				window.pre_apply_transform(Affine2::from_translation(translation));
+			}
+		},
+		WindowEvent::TouchpadMagnify(event) => {
+			let scale = event.scale as f32;
+			if scale.is_finite() && scale > 0.0 {
+				let origin = glam::Vec2::new(0.5, 0.5);
+				let transform = glam::Affine2::from_scale_angle_translation(glam::Vec2::splat(scale), 0.0, origin - scale * origin);
+				window.pre_apply_transform(transform);
 			}
 		},
 		_ => (),

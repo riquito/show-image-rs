@@ -3,20 +3,21 @@ use super::mouse_cache::MouseCache;
 pub fn convert_winit_event(
 	event: winit::event::Event<()>,
 	mouse_cache: &MouseCache,
+	modifiers: winit::keyboard::ModifiersState,
 ) -> Option<crate::event::Event> {
 	use crate::event::Event as C;
 	use winit::event::Event as W;
 
 	match event {
 		W::UserEvent(_) => None,
-		W::WindowEvent { window_id, event } => Some(convert_winit_window_event(window_id, event, mouse_cache)?.into()),
+		W::WindowEvent { window_id, event } => Some(convert_winit_window_event(window_id, event, mouse_cache, modifiers)?.into()),
 		W::DeviceEvent { device_id, event } => Some(convert_winit_device_event(device_id, event).into()),
 		W::NewEvents(_) => Some(C::NewEvents),
-		W::MainEventsCleared => Some(C::MainEventsCleared),
-		W::RedrawRequested(window_id) => Some(C::WindowEvent(crate::event::WindowRedrawRequestedEvent { window_id }.into())),
-		W::RedrawEventsCleared => Some(C::RedrawEventsCleared),
+		W::AboutToWait => Some(C::MainEventsCleared),
+		// Not exposed.
+		W::MemoryWarning => None,
 		// You can't stop the event loop!
-		W::LoopDestroyed => None,
+		W::LoopExiting => None,
 		W::Suspended => Some(C::Suspended),
 		W::Resumed => Some(C::Resumed),
 	}
@@ -44,12 +45,10 @@ pub fn convert_winit_device_event(
 			state: state.into(),
 		}
 		.into(),
-		W::Key(input) => event::DeviceKeyboardInputEvent {
+		W::Key(event) => event::DeviceKeyboardInputEvent {
 			device_id,
-			input: convert_winit_keyboard_input(input),
-		}
-		.into(),
-		W::Text { codepoint } => event::DeviceTextInputEvent { device_id, codepoint }.into(),
+			input: event,
+		}.into(),
 	}
 }
 
@@ -57,11 +56,11 @@ pub fn convert_winit_window_event(
 	window_id: winit::window::WindowId,
 	event: winit::event::WindowEvent,
 	mouse_cache: &MouseCache,
+	modifiers: winit::keyboard::ModifiersState,
 ) -> Option<crate::event::WindowEvent> {
 	use crate::event;
 	use winit::event::WindowEvent as W;
 
-	#[allow(deprecated)]
 	match event {
 		W::Ime(_) => None,
 		W::Occluded(_) => None,
@@ -72,19 +71,19 @@ pub fn convert_winit_window_event(
 		W::DroppedFile(file) => Some(event::WindowDroppedFileEvent { window_id, file }.into()),
 		W::HoveredFile(file) => Some(event::WindowHoveredFileEvent { window_id, file }.into()),
 		W::HoveredFileCancelled => Some(event::WindowHoveredFileCancelledEvent { window_id }.into()),
-		W::ReceivedCharacter(character) => Some(event::WindowTextInputEvent { window_id, character }.into()),
 		W::Focused(true) => Some(event::WindowFocusGainedEvent { window_id }.into()),
 		W::Focused(false) => Some(event::WindowFocusLostEvent { window_id }.into()),
 		W::KeyboardInput {
 			device_id,
-			input,
+			event,
 			is_synthetic,
 		} => Some(
 			event::WindowKeyboardInputEvent {
 				window_id,
 				device_id,
-				input: convert_winit_keyboard_input(input),
+				input: event,
 				is_synthetic,
+				modifiers,
 			}
 			.into(),
 		),
@@ -92,7 +91,6 @@ pub fn convert_winit_window_event(
 		W::CursorMoved {
 			device_id,
 			position,
-			modifiers,
 		} => {
 			let position = glam::DVec2::new(position.x, position.y).as_vec2();
 			Some(event::WindowMouseMoveEvent {
@@ -100,7 +98,6 @@ pub fn convert_winit_window_event(
 				device_id,
 				position,
 				prev_position: mouse_cache.get_prev_position(window_id, device_id).unwrap_or(position),
-				modifiers,
 				buttons: mouse_cache.get_buttons(device_id).cloned().unwrap_or_default(),
 			}.into())
 		},
@@ -118,7 +115,6 @@ pub fn convert_winit_window_event(
 			device_id,
 			delta,
 			phase,
-			modifiers,
 		} => Some(
 			event::WindowMouseWheelEvent {
 				window_id,
@@ -127,7 +123,6 @@ pub fn convert_winit_window_event(
 				phase,
 				position: mouse_cache.get_position(window_id, device_id),
 				buttons: mouse_cache.get_buttons(device_id).cloned().unwrap_or_default(),
-				modifiers,
 			}
 			.into(),
 		),
@@ -135,7 +130,6 @@ pub fn convert_winit_window_event(
 			device_id,
 			state,
 			button,
-			modifiers,
 		} => {
 			let position = mouse_cache.get_position(window_id, device_id)?;
 			let prev_position = mouse_cache.get_prev_position(window_id, device_id).unwrap_or(position);
@@ -147,7 +141,6 @@ pub fn convert_winit_window_event(
 				position,
 				prev_position,
 				buttons: mouse_cache.get_buttons(device_id).cloned().unwrap_or_default(),
-				modifiers,
 			}.into())
 		},
 		W::TouchpadPressure {
@@ -173,23 +166,6 @@ pub fn convert_winit_window_event(
 			.into(),
 		),
 		W::Touch(touch) => Some(event::WindowTouchEvent { window_id, touch }.into()),
-		W::TouchpadMagnify { device_id, delta, phase } => Some(
-			event::WindowTouchpadMagnifyEvent {
-				window_id,
-				device_id,
-				scale: 1.0 + delta,
-				phase,
-			}.into()
-		),
-		W::SmartMagnify { .. } => None,
-		W::TouchpadRotate { device_id, delta, phase } => Some(
-			event::WindowTouchpadRotateEvent {
-				window_id,
-				device_id,
-				angle_radians: delta.to_radians().into(),
-				phase,
-			}.into()
-		),
 		W::ThemeChanged(theme) => Some(
 			event::WindowThemeChangedEvent {
 				window_id,
@@ -198,16 +174,22 @@ pub fn convert_winit_window_event(
 			.into(),
 		),
 		W::ScaleFactorChanged { scale_factor, .. } => Some(event::WindowScaleFactorChangedEvent { window_id, scale_factor }.into()),
-	}
-}
 
-pub fn convert_winit_keyboard_input(input: winit::event::KeyboardInput) -> crate::event::KeyboardInput {
-	#[allow(deprecated)]
-	crate::event::KeyboardInput {
-		scan_code: input.scancode,
-		key_code: input.virtual_keycode,
-		modifiers: input.modifiers,
-		state: input.state.into(),
+		// TODO
+		W::ActivationTokenDone { .. } => None,
+		W::PinchGesture { device_id, delta, phase } => Some(
+			event::WindowTouchpadMagnifyEvent {
+				window_id,
+				device_id,
+				scale: 1.0 + delta,
+				phase,
+			}
+			.into(),
+		),
+		W::PanGesture { .. } => None,
+		W::DoubleTapGesture { .. } => None,
+		W::RotationGesture { .. } => None,
+		W::RedrawRequested => Some(event::WindowRedrawRequestedEvent { window_id }.into()),
 	}
 }
 
@@ -215,18 +197,17 @@ pub fn convert_winit_keyboard_input(input: winit::event::KeyboardInput) -> crate
 ///
 /// If the event was a [`Event::UserEvent`], it is returned as [`Err`].
 pub fn map_nonuser_event<T, U>(event: winit::event::Event<T>) -> Result<winit::event::Event<U>, T> {
-	use winit::event::Event::*;
+	use winit::event::Event;
 	match event {
-		UserEvent(x) => Err(x),
-		WindowEvent { window_id, event } => Ok(WindowEvent { window_id, event }),
-		DeviceEvent { device_id, event } => Ok(DeviceEvent { device_id, event }),
-		NewEvents(cause) => Ok(NewEvents(cause)),
-		MainEventsCleared => Ok(MainEventsCleared),
-		RedrawRequested(wid) => Ok(RedrawRequested(wid)),
-		RedrawEventsCleared => Ok(RedrawEventsCleared),
-		LoopDestroyed => Ok(LoopDestroyed),
-		Suspended => Ok(Suspended),
-		Resumed => Ok(Resumed),
+		Event::UserEvent(x) => Err(x),
+		Event::WindowEvent { window_id, event } => Ok(Event::WindowEvent { window_id, event }),
+		Event::DeviceEvent { device_id, event } => Ok(Event::DeviceEvent { device_id, event }),
+		Event::NewEvents(cause) => Ok(Event::NewEvents(cause)),
+		Event::AboutToWait => Ok(Event::AboutToWait),
+		Event::LoopExiting => Ok(Event::LoopExiting),
+		Event::MemoryWarning => Ok(Event::MemoryWarning),
+		Event::Suspended => Ok(Event::Suspended),
+		Event::Resumed => Ok(Event::Resumed),
 	}
 }
 
@@ -245,6 +226,8 @@ impl From<winit::event::MouseButton> for crate::event::MouseButton {
 			winit::event::MouseButton::Left => Self::Left,
 			winit::event::MouseButton::Right => Self::Right,
 			winit::event::MouseButton::Middle => Self::Middle,
+			winit::event::MouseButton::Back => Self::Back,
+			winit::event::MouseButton::Forward => Self::Forward,
 			winit::event::MouseButton::Other(x) => Self::Other(x),
 		}
 	}
